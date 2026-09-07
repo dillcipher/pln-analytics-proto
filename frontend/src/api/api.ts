@@ -1,0 +1,175 @@
+import axios from "axios";
+
+const DEFAULT_BACKEND_ORIGIN = "https://pln-analytics-platform.fastapicloud.dev";
+
+function normalizeBaseUrl(url: string): string {
+    return url.trim().replace(/\/+$/, "");
+}
+
+function normalizeProductionApiUrl(url: string): string {
+    const normalized = normalizeBaseUrl(url);
+    if (!normalized) return "";
+    return normalized.endsWith("/api/v1")
+        ? normalized
+        : `${normalized}/api/v1`;
+}
+
+const explicitApiUrl = normalizeProductionApiUrl(
+    typeof import.meta.env.VITE_API_URL === "string"
+        ? import.meta.env.VITE_API_URL
+        : "",
+);
+
+const configuredBackendUrl = normalizeBaseUrl(
+    typeof import.meta.env.VITE_BACKEND_URL === "string"
+        ? import.meta.env.VITE_BACKEND_URL
+        : "",
+);
+
+/*
+ * Production frontend and backend are separate deployments.
+ *
+ * IMPORTANT: do not fall back to window.location.origin in production.
+ * Vercel serves the SPA from pln-analytics.vercel.app and its catch-all
+ * rewrite sends /api/* to index.html. That makes axios receive HTML instead
+ * of FastAPI JSON and leaves Settings stuck on CHECKING.
+ */
+const backendOrigin =
+    explicitApiUrl
+        ? explicitApiUrl.replace(/\/api\/v1$/, "")
+        : configuredBackendUrl ||
+          (!import.meta.env.DEV
+              ? DEFAULT_BACKEND_ORIGIN
+              : "http://127.0.0.1:8000");
+
+export const API_ORIGIN = normalizeBaseUrl(backendOrigin);
+
+// Always target the real FastAPI origin. Same-origin is only appropriate when
+// a real reverse proxy is configured; the Vercel SPA has no API proxy.
+const API_BASE_URL =
+    explicitApiUrl || `${API_ORIGIN}/api/v1`;
+
+const api = axios.create({
+    baseURL: API_BASE_URL,
+    timeout: Number(import.meta.env.VITE_API_TIMEOUT || 120000),
+    headers: { Accept: "application/json" },
+});
+
+/**
+ * DLPD is the heaviest read surface in the application. The page can mount
+ * KPI, ULP, customer-list and map requests at the same time. Sending those
+ * parquet scans concurrently defeats the backend memory guard and can push
+ * a 500 MB container into OOM.
+ *
+ * Keep a tiny FIFO gate in the browser for DLPD GET requests. This does not
+ * affect uploads or unrelated API calls, and it preserves the existing API
+ * contract. A rejected request always releases the next request.
+ */
+let dlpdReadQueue: Promise<void> = Promise.resolve();
+
+function isDlpdRead(config: any): boolean {
+    const method = String(config?.method ?? "get").toLowerCase();
+    const url = String(config?.url ?? "");
+    return method === "get" && url.includes("/dlpd/");
+}
+
+function normalizeDlpdCustomerParams(config: any): void {
+    if (!isDlpdRead(config)) return;
+
+    const url = String(config?.url ?? "");
+    if (!url.endsWith("/dlpd/customers")) return;
+
+    const params = config.params;
+    if (!params || typeof params !== "object") return;
+
+    // The customer table historically used camelCase while FastAPI exposes
+    // snake_case query parameters. Normalize at the transport boundary so
+    // older callers cannot silently fall back to the default customer type.
+    if (
+        params.customer_type == null &&
+        params.customerType != null
+    ) {
+        params.customer_type = params.customerType;
+    }
+
+    if (
+        params.page_size == null &&
+        params.pageSize != null
+    ) {
+        params.page_size = params.pageSize;
+    }
+
+    delete params.customerType;
+    delete params.pageSize;
+}
+
+api.interceptors.request.use(async (config) => {
+    const token = localStorage.getItem("access_token");
+    if (token) {
+        config.headers = config.headers ?? {};
+        config.headers.Authorization = `Bearer ${token}`;
+    }
+
+    if (config.data instanceof FormData && config.headers) {
+        delete (config.headers as any)["Content-Type"];
+        delete (config.headers as any)["content-type"];
+    }
+
+    normalizeDlpdCustomerParams(config);
+
+    if (isDlpdRead(config)) {
+        const configuredTimeout = Number(
+            import.meta.env.VITE_DLPD_API_TIMEOUT ||
+            import.meta.env.VITE_API_TIMEOUT ||
+            120000,
+        );
+        config.timeout = Math.max(
+            Number.isFinite(configuredTimeout)
+                ? configuredTimeout
+                : 120000,
+            600000,
+        );
+
+        let release!: () => void;
+        const turn = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        const previous = dlpdReadQueue;
+        dlpdReadQueue = previous.then(() => turn);
+
+        await previous;
+        (config as any).__dlpdRelease = release;
+    }
+
+    return config;
+});
+
+function releaseDlpdRead(config: any): void {
+    const release = config?.__dlpdRelease;
+    if (typeof release === "function") {
+        delete config.__dlpdRelease;
+        release();
+    }
+}
+
+api.interceptors.response.use(
+    (response) => {
+        releaseDlpdRead(response.config);
+        return response;
+    },
+    (error) => {
+        releaseDlpdRead(error?.config);
+
+        if (error?.response?.status === 401) {
+            const requestUrl = String(error?.config?.url ?? "");
+            if (!requestUrl.includes("/auth/login")) {
+                localStorage.removeItem("access_token");
+                window.dispatchEvent(new Event("pln-auth-expired"));
+            }
+        }
+        return Promise.reject(error);
+    },
+);
+
+export default api;

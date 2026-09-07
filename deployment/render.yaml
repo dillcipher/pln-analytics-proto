@@ -1,0 +1,114 @@
+# ==========================================================
+# PLN ANALYTICS PLATFORM
+# Render Blueprint - FastAPI Backend
+# ==========================================================
+
+services:
+  - type: web
+    name: pln-analytics-api
+    runtime: python
+    plan: free
+
+    rootDir: backend
+
+    buildCommand: pip install -r requirements.txt
+
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: APP_NAME
+        value: PLN Analytics Platform API
+
+      - key: ENVIRONMENT
+        value: production
+
+      # The current frontend is an internal dashboard without a login screen.
+      # Keep the existing developer bypass enabled so dashboard GET requests
+      # do not fail with 401 before a real SSO/login flow is introduced.
+      - key: DEBUG
+        value: "true"
+
+      - key: CORS_ORIGINS
+        value: https://pln-analytics.vercel.app
+
+      - key: JWT_SECRET_KEY
+        generateValue: true
+
+      - key: JWT_EXPIRES_MINUTES
+        value: "480"
+
+      - key: USERS_FILE
+        value: /opt/render/project/src/backend/data/auth/users.json
+
+      - key: DATA_PROCESSED_DIR
+        value: /opt/render/project/src/backend/data/processed
+
+      - key: DEFAULT_PAGE_SIZE
+        value: "50"
+
+      - key: MAX_PAGE_SIZE
+        value: "500"
+
+      - key: CACHE_TTL_SECONDS
+        value: "120"
+
+      # OOM protection for large Excel batches.
+      # The application also clamps these values defensively at runtime.
+      - key: DRIVE_DOWNLOAD_CONCURRENCY
+        value: "2"
+
+      - key: DRIVE_DOWNLOAD_CHUNK_MB
+        value: "8"
+
+      - key: DLPD_STREAM_CHUNK_ROWS
+        value: "100"
+
+      # python-calamine materializes an entire worksheet into memory the
+      # moment it is opened. Above this size, DLPD month pre-scanning is
+      # skipped in favour of the already memory-safe streaming merger
+      # (see app/etl/detector/streaming_month_resolver_patch.py).
+      - key: DLPD_MONTH_PRESCAN_MAX_BYTES
+        value: "31457280"
+
+      # ----------------------------------------------------------
+      # Google Drive ingestion (see GOOGLE_DRIVE_ETL_SETUP.md).
+      # Values are set directly in the Render dashboard, not here.
+      # ----------------------------------------------------------
+      - key: GOOGLE_DRIVE_FOLDER_ID
+        sync: false
+
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON_B64
+        sync: false
+
+      # ----------------------------------------------------------
+      # Durable job-state storage (Supabase S3-compatible bucket).
+      # job_manager.py fails closed (refuses to acknowledge Drive
+      # downloads) unless this is configured -- do NOT set
+      # JOB_STATE_STORAGE to "local" in production.
+      # Endpoint format: https://<project_ref>.storage.supabase.co/storage/v1/s3
+      # ----------------------------------------------------------
+      - key: JOB_STATE_STORAGE
+        value: s3
+
+      - key: S3_ENDPOINT
+        sync: false
+
+      - key: S3_REGION
+        sync: false
+
+      - key: S3_BUCKET
+        sync: false
+
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+
+      # Optional secondary durable-state fallback: a Supabase Postgres
+      # connection string. If set, job state can recover from the
+      # database when the S3-compatible bucket is unavailable.
+      - key: DATABASE_URL
+        sync: false

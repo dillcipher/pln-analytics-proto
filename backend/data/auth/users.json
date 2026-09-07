@@ -1,0 +1,9 @@
+{
+  "admin": {
+    "username": "admin",
+    "full_name": "Administrator",
+    "password_hash": "pbkdf2_sha256$310000$umq5mJDvCj2_pu2PKjWAIg$IyByGYqk_lkYPkjNNvVkjQtKo1lRjC_6Ecy1mbyu2hk",
+    "role": "admin",
+    "unitupi_scope": null
+  }
+}

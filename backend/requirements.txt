@@ -1,0 +1,15 @@
+fastapi[standard]
+uvicorn
+python-dotenv
+python-multipart
+aiofiles
+pandas
+openpyxl
+python-calamine
+duckdb
+pyarrow
+boto3==1.43.75
+google-api-python-client
+google-auth
+
+psycopg[binary]

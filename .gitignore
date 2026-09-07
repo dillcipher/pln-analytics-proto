@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+*.bak
+
+backend/data/processed/
+*.duckdb
+*.duckdb.wal
+
+backend/data/raw/incoming/
